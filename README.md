@@ -2,7 +2,7 @@
 
 Experiment to see if Bootc could work on Debian
 
-
+<img width="2196" height="1239" alt="image" src="https://github.com/user-attachments/assets/0b031de0-5593-49e8-8e5a-535ebdcf46e3" />
 
 ## Building
 
