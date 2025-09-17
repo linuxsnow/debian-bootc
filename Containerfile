@@ -1,84 +1,69 @@
 FROM docker.io/library/debian:unstable
 
-COPY files/37composefs/ /usr/lib/dracut/modules.d/37composefs/
-COPY files/ostree/prepare-root.conf /usr/lib/ostree/prepare-root.conf
+ARG DEBIAN_FRONTEND=noninteractive
+# Antipattern but we are doing this since `apt`/`debootstrap` does not allow chroot installation on unprivileged podman builds
+ENV DEV_DEPS="libzstd-dev libssl-dev pkg-config libostree-dev curl git build-essential meson libfuse3-dev go-md2man dracut whois"
 
-ENV DEBIAN_FRONTEND=noninteractive
+RUN rm /etc/apt/apt.conf.d/docker-gzip-indexes /etc/apt/apt.conf.d/docker-no-languages && \
+    apt update -y && \
+    apt install -y $DEV_DEPS ostree
 
-RUN apt update -y && apt install -y libzstd-dev libssl-dev pkg-config libostree-dev curl git build-essential meson libfuse3-dev ostree
-
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-
-RUN --mount=type=tmpfs,dst=/tmp cd /tmp && \
-    git clone https://github.com/bootc-dev/bootc.git bootc && \
-    cd bootc && \
-    git fetch --all && \
-    git switch origin/composefs-backend -d && \
-    /root/.cargo/bin/cargo build --release --bins && \
-    install -Dpm0755 -t /usr/bin ./target/release/bootc && \
-    install -Dpm0755 -t /usr/bin ./target/release/system-reinstall-bootc && \
-    install -Dpm0755 -t /usr/bin ./target/release/bootc-initramfs-setup
-
-RUN --mount=type=tmpfs,dst=/tmp cd /tmp && \
-    git clone https://github.com/p5/coreos-bootupd.git bootupd && \
-    cd bootupd && \
-    git fetch --all && \
-    git switch origin/sdboot-support -d && \
+ENV CARGO_FEATURES="composefs-backend"
+RUN --mount=type=tmpfs,dst=/tmp --mount=type=tmpfs,dst=/root \
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- --profile minimal -y && \
+    git clone https://github.com/bootc-dev/bootc.git /tmp/bootc && \
+    cd /tmp/bootc && \
+    PATH=/root/.cargo/bin:$PATH make && \
+    make install-all && \
+    make install-initramfs-dracut && \
+    git clone https://github.com/p5/coreos-bootupd.git -b sdboot-support /tmp/bootupd && \
+    cd /tmp/bootupd && \
     /root/.cargo/bin/cargo build --release --bins --features systemd-boot && \
-    install -Dpm0755 -t /usr/bin ./target/release/bootupd && \
-    ln -s ./bootupd /usr/bin/bootupctl
+    make install
 
-RUN --mount=type=tmpfs,dst=/tmp cd /tmp && \
-    git clone https://github.com/containers/composefs.git composefs && \
-    cd composefs && \
-    git fetch --all && \
-    meson setup build --prefix=/usr --default-library=shared -Dfuse=enabled && \
-    ninja -C build && \
-    ninja -C build install
-
+ENV DRACUT_NO_XATTR=1
 RUN apt install -y \
-  dracut \
-  podman \
-  linux-image-generic \
-  firmware-linux-free \
-  systemd \
   btrfs-progs \
-  e2fsprogs \
-  xfsprogs \
-  udev \
-  cpio \
-  zstd \
-  binutils \
   dosfstools \
-  conmon \
-  crun \
-  netavark \
-  skopeo \
-  dbus \
+  e2fsprogs \
   fdisk \
-  systemd-boot*
+  firmware-linux-free \
+  linux-image-generic \
+  skopeo \
+  systemd \
+  systemd-boot* \
+  xfsprogs
 
-RUN cp /usr/bin/bootc-initramfs-setup /usr/lib/dracut/modules.d/37composefs
+RUN sh -c 'export KERNEL_VERSION="$(basename "$(find /usr/lib/modules -maxdepth 1 -type d | grep -v -E "*.img" | tail -n 1)")" && \
+    dracut --force --no-hostonly --reproducible --zstd --verbose --kver "$KERNEL_VERSION"  "/usr/lib/modules/$KERNEL_VERSION/initramfs.img" && \
+    cp /boot/vmlinuz-$KERNEL_VERSION "/usr/lib/modules/$KERNEL_VERSION/vmlinuz"'
 
-RUN echo "$(basename "$(find /usr/lib/modules -maxdepth 1 -type d | grep -v -E "*.img" | tail -n 1)")" > kernel_version.txt && \
-    dracut --force --no-hostonly --reproducible --zstd --verbose --kver "$(cat kernel_version.txt)"  "/usr/lib/modules/$(cat kernel_version.txt)/initramfs.img" && \
-    cp /boot/vmlinuz-$(cat kernel_version.txt) "/usr/lib/modules/$(cat kernel_version.txt)/vmlinuz" && \
-    rm kernel_version.txt
-
-# If you want a desktop :)
-# RUN apt install -y gnome
-
-# Alter root file structure a bit for ostree
-RUN mkdir -p /boot /sysroot /var/home && \
-    rm -rf /var/log /home /root /usr/local /srv && \
-    ln -s /var/home /home && \
-    ln -s /var/roothome /root && \
-    ln -s /var/usrlocal /usr/local && \
-    ln -s /var/srv /srv
+# Update useradd default to /var/home instead of /home for User Creation
+RUN sed -i 's|^HOME=.*|HOME=/var/home|' "/etc/default/useradd"
 
 # Setup a temporary root passwd (changeme) for dev purposes
 # TODO: Replace this for a more robust option when in prod
-RUN usermod -p '$6$AJv9RHlhEXO6Gpul$5fvVTZXeM0vC03xckTIjY8rdCofnkKSzvF5vEzXDKAby5p3qaOGTHDypVVxKsCE3CbZz7C3NXnbpITrEUvN/Y/' root
+RUN usermod -p "$(echo "changeme" | mkpasswd -s)" root
 
-# Necessary labels
-LABEL containers.bootc 1
+RUN apt remove -y $DEV_DEPS && \
+    apt autoremove -y
+ENV DEV_DEPS=
+
+RUN rm -rf /var /boot && \
+    ln -s /var/home /home && \
+    ln -s /var/roothome /root && \
+    ln -s /var/srv /srv && \
+    ln -s sysroot/ostree ostree && \
+    ln -s /var/usrlocal /usr/local && \
+    mkdir -p /sysroot /var/home /boot && \
+    rm -rf /var/log /home /root /usr/local /srv
+
+# Necessary for `bootc install`
+RUN mkdir -p /usr/lib/ostree/prepare-root && tee "/usr/lib/ostree/prepare-root.conf" <<EOF
+[composefs]
+enabled = yes
+[sysroot]
+readonly = true
+EOF
+
+RUN bootc container lint
