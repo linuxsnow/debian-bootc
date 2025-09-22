@@ -8,12 +8,11 @@ RUN rm /etc/apt/apt.conf.d/docker-gzip-indexes /etc/apt/apt.conf.d/docker-no-lan
     apt update -y && \
     apt install -y $DEV_DEPS ostree
 
-ENV CARGO_FEATURES="composefs-backend"
 RUN --mount=type=tmpfs,dst=/tmp --mount=type=tmpfs,dst=/root \
     curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- --profile minimal -y && \
     git clone https://github.com/bootc-dev/bootc.git /tmp/bootc && \
     cd /tmp/bootc && \
-    PATH=/root/.cargo/bin:$PATH make && \
+    CARGO_FEATURES="composefs-backend" PATH="/root/.cargo/bin:$PATH" make bin && \
     make install-all && \
     make install-initramfs-dracut && \
     git clone https://github.com/p5/coreos-bootupd.git -b sdboot-support /tmp/bootupd && \
@@ -38,9 +37,6 @@ RUN sh -c 'export KERNEL_VERSION="$(basename "$(find /usr/lib/modules -maxdepth 
     dracut --force --no-hostonly --reproducible --zstd --verbose --kver "$KERNEL_VERSION"  "/usr/lib/modules/$KERNEL_VERSION/initramfs.img" && \
     cp /boot/vmlinuz-$KERNEL_VERSION "/usr/lib/modules/$KERNEL_VERSION/vmlinuz"'
 
-# Update useradd default to /var/home instead of /home for User Creation
-RUN sed -i 's|^HOME=.*|HOME=/var/home|' "/etc/default/useradd"
-
 # Setup a temporary root passwd (changeme) for dev purposes
 # TODO: Replace this for a more robust option when in prod
 RUN usermod -p "$(echo "changeme" | mkpasswd -s)" root
@@ -49,21 +45,21 @@ RUN apt remove -y $DEV_DEPS && \
     apt autoremove -y
 ENV DEV_DEPS=
 
-RUN rm -rf /var /boot && \
+# Update useradd default to /var/home instead of /home for User Creation
+RUN sed -i 's|^HOME=.*|HOME=/var/home|' "/etc/default/useradd"
+
+RUN rm -rf /var /boot /home /root /usr/local /srv && \
+    mkdir -p /var && \
     ln -s /var/home /home && \
     ln -s /var/roothome /root && \
     ln -s /var/srv /srv && \
     ln -s sysroot/ostree ostree && \
     ln -s /var/usrlocal /usr/local && \
-    mkdir -p /sysroot /var/home /boot && \
-    rm -rf /var/log /home /root /usr/local /srv
+    mkdir -p /sysroot /boot
 
 # Necessary for `bootc install`
-RUN mkdir -p /usr/lib/ostree/prepare-root && tee "/usr/lib/ostree/prepare-root.conf" <<EOF
-[composefs]
-enabled = yes
-[sysroot]
-readonly = true
-EOF
+RUN mkdir -p /usr/lib/ostree && \
+    printf  "[composefs]\nenabled = yes\n[sysroot]\nreadonly = true\n" | \
+    tee "/usr/lib/ostree/prepare-root.conf"
 
 RUN bootc container lint
