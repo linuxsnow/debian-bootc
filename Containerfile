@@ -48,14 +48,23 @@ ENV DEV_DEPS=
 # Update useradd default to /var/home instead of /home for User Creation
 RUN sed -i 's|^HOME=.*|HOME=/var/home|' "/etc/default/useradd"
 
-RUN rm -rf /var /boot /home /root /usr/local /srv && \
-    mkdir -p /var && \
+
+COPY files/ /
+
+
+
+### Prepare final image
+RUN rm -rf /var /boot && \
     ln -s /var/home /home && \
     ln -s /var/roothome /root && \
     ln -s /var/srv /srv && \
     ln -s sysroot/ostree ostree && \
     ln -s /var/usrlocal /usr/local && \
-    mkdir -p /sysroot /boot
+    mkdir -p /sysroot /var/home /boot && \
+    rm -rf /var/log /home /root /usr/local /srv
+
+RUN systemd-tmpfiles --create /usr/lib/tmpfiles.d/bootc.conf
+
 
 # Necessary for `bootc install`
 RUN mkdir -p /usr/lib/ostree && \
