@@ -20,6 +20,8 @@ RUN --mount=type=tmpfs,dst=/tmp --mount=type=tmpfs,dst=/root \
     /root/.cargo/bin/cargo build --release --bins --features systemd-boot && \
     make install
 
+
+# Install required packages for bootc images
 ENV DRACUT_NO_XATTR=1
 RUN apt install -y \
   btrfs-progs \
@@ -37,9 +39,7 @@ RUN sh -c 'export KERNEL_VERSION="$(basename "$(find /usr/lib/modules -maxdepth 
     dracut --force --no-hostonly --reproducible --zstd --verbose --kver "$KERNEL_VERSION"  "/usr/lib/modules/$KERNEL_VERSION/initramfs.img" && \
     cp /boot/vmlinuz-$KERNEL_VERSION "/usr/lib/modules/$KERNEL_VERSION/vmlinuz"'
 
-# Setup a temporary root passwd (changeme) for dev purposes
-# TODO: Replace this for a more robust option when in prod
-RUN usermod -p "$(echo "changeme" | mkpasswd -s)" root
+
 
 RUN apt remove -y $DEV_DEPS && \
     apt autoremove -y
@@ -51,7 +51,12 @@ RUN sed -i 's|^HOME=.*|HOME=/var/home|' "/etc/default/useradd"
 
 COPY files/ /
 
-
+RUN apt install -y --no-install-recommends \
+  gnome-core \
+  task-desktop \
+  tasksel \
+  network-manager-gnome \
+  gnome-initial-setup
 
 ### Prepare final image
 RUN rm -rf /var /boot && \
@@ -70,5 +75,9 @@ RUN systemd-tmpfiles --create /usr/lib/tmpfiles.d/bootc.conf
 RUN mkdir -p /usr/lib/ostree && \
     printf  "[composefs]\nenabled = yes\n[sysroot]\nreadonly = true\n" | \
     tee "/usr/lib/ostree/prepare-root.conf"
+# delete the root account from /etc/passwd and /etc/shadow
+RUN passwd --delete root && \
+    passwd --lock root
+
 
 RUN bootc container lint
